@@ -1,20 +1,22 @@
 package com.agoda.dm
 
-import java.io.File
+import java.io.{File, InputStream}
+import java.net.URI
+import java.nio.charset.StandardCharsets
 
+import com.agoda.dm.TestHelper._
 import com.agoda.dm.config.AppConfig
-import com.agoda.dm.protocol.Http
+import com.agoda.dm.protocol.{Http, Resource}
 import com.github.tomakehurst.wiremock.WireMockServer
 import com.github.tomakehurst.wiremock.client.WireMock._
 import com.github.tomakehurst.wiremock.core.WireMockConfiguration.wireMockConfig
 import com.github.tomakehurst.wiremock.http.Fault
 import com.typesafe.config.ConfigFactory
-import org.apache.commons.io.FileUtils
-import org.scalactic.source.Position
+import org.apache.commons.io.{FileUtils, IOUtils}
 import org.scalatest._
 
 import scala.concurrent.ExecutionContext
-import scala.io.Source
+import scala.util.Try
 
 class DownloadManagerSpec extends AsyncFlatSpec with Matchers with BeforeAndAfterAll with BeforeAndAfter {
 
@@ -80,10 +82,39 @@ class DownloadManagerSpec extends AsyncFlatSpec with Matchers with BeforeAndAfte
     }
   }
 
-  it should "try to download file few times before give up" in {
-    // TODO implement using wiremock custom extension
-    assert(true)
+  "Download manager" should "try to download file few times before give up" in {
+    val fileName = "exceptions"
+    val testData = "test data"
+    val stream = IOUtils.toInputStream(testData, StandardCharsets.UTF_8)
+    val failStream: InputStream = null
+
+    val testRes = new Resource {
+      var counter = 0
+
+      override def uri: URI = ???
+
+      override def getInputStream: Try[InputStream] = {
+        if (counter == 2) Try(stream)
+        else {
+          counter = counter + 1
+          Try(failStream)
+        }
+      }
+    }
+
+    val dlItem = DownloadItem(testRes, s"${testAppConf.destinationFolder}/$fileName")
+
+    val res = dlManager.downloadAll(List(dlItem))
+
+    res.map {case (complete, failed) =>
+      assert(complete.size == 1)
+      assert(failed.isEmpty)
+      assert(complete.contains(SuccessfulDownload(dlItem)))
+      assert(isFileContentCorrect(dlItem.destinationPath, testData))
+      assert(downloadFolder.list().length == 1)
+    }
   }
+
 
   private def generateStub(path: String, content: String) = {
     stubFor(get(urlEqualTo(path))
@@ -94,13 +125,8 @@ class DownloadManagerSpec extends AsyncFlatSpec with Matchers with BeforeAndAfte
   }
 
   private def getHttpDownloadItem(uriPath: String, fileName: String) = {
-    val httpRes = Http(s"http://localhost:8080$uriPath", testAppConf.httpConf)
+    val httpRes = Http(new URI(s"http://localhost:8080$uriPath"), testAppConf.httpConf)
     DownloadItem(httpRes, s"${testAppConf.destinationFolder}/$fileName")
-  }
-
-  private def isFileContentCorrect(path: String, content: String): Boolean = {
-    val source = Source.fromFile(new File(path))
-    source.mkString == content
   }
 
   override protected def beforeAll(): Unit = {

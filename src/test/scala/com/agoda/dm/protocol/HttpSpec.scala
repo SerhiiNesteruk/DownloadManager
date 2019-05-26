@@ -1,18 +1,18 @@
 package com.agoda.dm.protocol
 
 import java.io.File
+import java.net.URI
+import java.nio.charset.StandardCharsets
 
 import com.agoda.dm.config.AppConfig
 import com.github.tomakehurst.wiremock.WireMockServer
-import com.github.tomakehurst.wiremock.core.WireMockConfiguration.wireMockConfig
 import com.github.tomakehurst.wiremock.client.WireMock._
+import com.github.tomakehurst.wiremock.core.WireMockConfiguration.wireMockConfig
 import com.typesafe.config.ConfigFactory
-import org.apache.commons.io.FileUtils
+import org.apache.commons.io.IOUtils
 import org.scalatest._
 
-import scala.io.Source
-
-class HttpSpec extends FlatSpec with Matchers with BeforeAndAfterAll {
+class HttpSpec extends FlatSpec with Matchers with BeforeAndAfterAll with TryValues {
 
   val conf = ConfigFactory.load()
   val testAppConf = AppConfig.apply(conf)
@@ -23,9 +23,9 @@ class HttpSpec extends FlatSpec with Matchers with BeforeAndAfterAll {
 
   var wireMockServer: WireMockServer = _
 
-  "Http resource" should "save file to local filesystem" in {
+  "Http resource" should "return InputStream if link is correct" in {
 
-    val httpRes = Http("http://localhost:8080/my/resource", testAppConf.httpConf)
+    val httpRes = Http(new URI("http://localhost:8080/my/resource"), testAppConf.httpConf)
     val fileContent = "content"
 
     stubFor(get(urlEqualTo("/my/resource"))
@@ -34,27 +34,29 @@ class HttpSpec extends FlatSpec with Matchers with BeforeAndAfterAll {
         .withHeader("Content-Type", "application/octet-stream")
         .withBody(fileContent)))
 
-    httpRes.save(fileFullPath)
-    val fromFile = Source.fromFile(new File(fileFullPath))
-    fromFile.mkString === fileContent
+    val downloaded = httpRes.getInputStream.map { stream =>
+      IOUtils.toString(stream, StandardCharsets.UTF_8)
+    }
+    downloaded.success.value should be (fileContent)
+
+  }
+
+  it should "return failure if link is broken" in {
+    val broken = Http(new URI("http://non-exists-site.com.ua/non-exist-file"), testAppConf.httpConf)
+    val stream = broken.getInputStream
+    stream.failure.exception should have message "non-exists-site.com.ua"
   }
 
   override protected def beforeAll(): Unit = {
     wireMockServer = new WireMockServer(wireMockConfig().port(8080))
     wireMockServer.start()
-    cleanUp()
-    FileUtils.forceMkdir(outFolder)
 
     super.beforeAll()
   }
 
   override protected def afterAll(): Unit = {
     wireMockServer.stop()
-    cleanUp()
     super.afterAll()
   }
 
-  private def cleanUp(): Unit = {
-    FileUtils.deleteQuietly(outFolder)
-  }
 }

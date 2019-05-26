@@ -1,12 +1,10 @@
 package com.agoda.dm
 
-import java.io.File
-
+import com.agoda.dm.util.AgodaIoUtil
 import com.typesafe.scalalogging.StrictLogging
-import org.apache.commons.io.FileUtils
 
 import scala.concurrent.{ExecutionContext, Future}
-import scala.util.{Failure, Success}
+import scala.util.{Failure, Success, Try}
 
 class DownloadManager(maxRetry: Int) extends StrictLogging {
 
@@ -21,23 +19,19 @@ class DownloadManager(maxRetry: Int) extends StrictLogging {
   }
 
   private def download(dlItem: DownloadItem, retries: Int)(implicit ec: ExecutionContext): Future[DownloadResult] = {
-    retry(dlItem.resource.save(dlItem.destinationPath), maxRetry)
+    retry(AgodaIoUtil.saveTo(dlItem.resource, dlItem.destinationPath), maxRetry)
       .transform {
         case Success(_) =>
           Success(SuccessfulDownload(dlItem))
         case Failure(ex) =>
           logger.warn(s"failed to download ${dlItem.resource.uri}", ex)
-          cleanUpFailed(dlItem)
           Success(FailedDownload(dlItem, ex))
       }
   }
 
-  private def retry[T](op: => T, retries: Int)(implicit ec: ExecutionContext): Future[T] = {
-    Future(op).recoverWith { case _ if retries > 0 => retry(op, retries - 1) }
-  }
-
-  private def cleanUpFailed(dlEntry: DownloadItem): Unit = {
-    FileUtils.deleteQuietly(new File(dlEntry.destinationPath))
+  private def retry[T](op: => Try[T], retries: Int)(implicit ec: ExecutionContext): Future[T] = {
+    val toFuture = Future(op).flatMap(Future.fromTry)
+    toFuture.recoverWith { case _ if retries > 0 => retry(op, retries - 1) }
   }
 
 }
